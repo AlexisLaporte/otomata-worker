@@ -3,7 +3,7 @@
 Generic task worker with Claude Agent SDK. Multi-tenant, chat-based agent execution with SSE streaming.
 
 ## Stack
-- Python 3.11+, FastAPI, SQLAlchemy, PostgreSQL
+- Python 3.10+, FastAPI, SQLAlchemy, PostgreSQL
 - claude-agent-sdk (agent executor)
 - Typer (CLI), Rich (output)
 - Install: `pip install -e ".[agent,dev]" --break-system-packages`
@@ -34,7 +34,7 @@ otomata_worker/
 - `POST /chats` - Create chat (tenant, system_prompt, workspace, allowed_tools, max_turns, metadata)
 - `GET /chats/{id}` - Chat detail with messages
 - `PATCH /chats/{id}` - Update chat (system_prompt, workspace, allowed_tools, max_turns, metadata)
-- `GET /chats/{id}/messages` - List messages
+- `GET /chats/{id}/messages?include_tools=true` - List messages (with per-turn text + tool_use interleaved)
 - `POST /chats/{id}/messages` - Send message → creates agent task
 - `GET /chats/{id}/events` - SSE stream for active task
 
@@ -86,3 +86,12 @@ otomata-worker identities list/add/status/block/unblock
 | CORS_ORIGINS | Allowed origins (default: *) |
 | POLL_INTERVAL | Worker poll seconds (default: 5) |
 | ANTHROPIC_API_KEY | Claude API key |
+
+## Prod
+
+```bash
+ssh -i ~/.ssh/alexis root@51.15.225.121
+cd /opt/otomata-worker
+```
+
+Service: `financex-worker` (systemd), installed globally via `pip install -e ".[agent]"`
