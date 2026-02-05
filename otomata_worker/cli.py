@@ -31,12 +31,28 @@ def run(
     worker_id: str = typer.Option(None, "--id", help="Worker ID"),
     poll_interval: int = typer.Option(5, "--interval", "-i", help="Poll interval in seconds")
 ):
-    """Run the worker loop."""
+    """Run the worker loop (poll only, no API)."""
     from .worker import run_worker
     run_worker(
         workspace=workspace or os.getcwd(),
         worker_id=worker_id,
         poll_interval=poll_interval
+    )
+
+
+@app.command()
+def serve(
+    port: int = typer.Option(7001, "--port", "-p", help="Server port"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Server host"),
+    reload: bool = typer.Option(False, "--reload", help="Auto-reload on changes")
+):
+    """Start FastAPI server with integrated worker."""
+    import uvicorn
+    uvicorn.run(
+        "otomata_worker.server:app",
+        host=host,
+        port=port,
+        reload=reload,
     )
 
 
@@ -353,6 +369,42 @@ def db_init():
 
     init_db()
     console.print("[green]Database initialized[/green]")
+
+
+@db_app.command("migrate")
+def db_migrate():
+    """Run migrations (add missing columns/tables)."""
+    from .database import get_db_engine
+    from .models import Base, Chat
+    from sqlalchemy import inspect, text
+
+    engine = get_db_engine()
+    inspector = inspect(engine)
+    expected_chat_cols = {'id', 'tenant', 'metadata', 'system_prompt', 'workspace', 'allowed_tools', 'max_turns', 'created_at', 'updated_at'}
+
+    # Check if chats table exists with old schema (needs drop+recreate)
+    if 'chats' in inspector.get_table_names():
+        actual_cols = {c['name'] for c in inspector.get_columns('chats')}
+        missing = expected_chat_cols - actual_cols
+        if missing:
+            console.print(f"[yellow]chats table missing columns: {missing} — recreating[/yellow]")
+            with engine.begin() as conn:
+                conn.execute(text("DROP TABLE IF EXISTS task_events CASCADE"))
+                conn.execute(text("DROP TABLE IF EXISTS messages CASCADE"))
+                conn.execute(text("DROP TABLE IF EXISTS chats CASCADE"))
+
+    # Add chat_id to tasks if missing
+    if 'tasks' in inspector.get_table_names():
+        columns = [c['name'] for c in inspector.get_columns('tasks')]
+        if 'chat_id' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN chat_id INTEGER REFERENCES chats(id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_chat_id ON tasks(chat_id)"))
+            console.print("[green]Added chat_id to tasks[/green]")
+
+    # Create new/missing tables
+    Base.metadata.create_all(engine)
+    console.print("[green]Migration complete[/green]")
 
 
 @db_app.command("url")

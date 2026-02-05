@@ -19,7 +19,8 @@ class TaskManager:
         params: Optional[dict] = None,
         prompt: Optional[str] = None,
         workspace: Optional[str] = None,
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        chat_id: Optional[int] = None
     ) -> int:
         """Create a new task.
 
@@ -30,6 +31,7 @@ class TaskManager:
             prompt: Agent prompt (for type='agent')
             workspace: Working directory
             session_id: Claude session ID (for resume)
+            chat_id: Optional linked chat ID
 
         Returns:
             Created Task ID
@@ -42,7 +44,8 @@ class TaskManager:
                 params=params,
                 prompt=prompt,
                 workspace=workspace,
-                session_id=session_id
+                session_id=session_id,
+                chat_id=chat_id
             )
             session.add(task)
             session.flush()
@@ -156,6 +159,17 @@ class TaskManager:
                 }
                 for t in tasks
             ]
+
+    def get_active_task_for_chat(self, chat_id: int) -> Optional[Task]:
+        """Get the active (pending or running) task for a chat."""
+        with get_session() as session:
+            task = session.query(Task).filter(
+                Task.chat_id == chat_id,
+                Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING])
+            ).order_by(Task.created_at.desc()).first()
+            if task:
+                session.expunge(task)
+            return task
 
     def update_session_id(self, task_id: int, session_id: str):
         """Update Claude session ID for agent tasks."""

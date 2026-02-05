@@ -13,15 +13,18 @@ dependencies = [
     "cryptography",
     "typer>=0.9.0",
     "rich",
+    "fastapi>=0.104",
+    "uvicorn[standard]",
 ]
 
 [project.optional-dependencies]
 agent = [
-    "claude-code-sdk",
+    "claude-agent-sdk",
 ]
 dev = [
     "pytest",
     "pytest-asyncio",
+    "httpx",
 ]
 
 [project.scripts]

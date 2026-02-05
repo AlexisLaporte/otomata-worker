@@ -20,6 +20,73 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
 
 
+class MessageRole(str, Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class Chat(Base):
+    """Chat session with system prompt and config."""
+    __tablename__ = 'chats'
+
+    id = Column(Integer, primary_key=True)
+    tenant = Column(String(100), index=True)
+    metadata_ = Column('metadata', JSON)
+    system_prompt = Column(Text)
+    workspace = Column(String(255))
+    allowed_tools = Column(JSON)
+    max_turns = Column(Integer, default=50)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    messages = relationship("Message", back_populates="chat", order_by="Message.sequence")
+    tasks = relationship("Task", back_populates="chat")
+
+    def __repr__(self):
+        return f"<Chat {self.id} tenant={self.tenant}>"
+
+
+class Message(Base):
+    """Chat message."""
+    __tablename__ = 'messages'
+
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(Integer, ForeignKey('chats.id'), index=True)
+    role = Column(
+        SQLEnum(MessageRole, values_callable=lambda x: [e.value for e in x], create_constraint=False, native_enum=True, name='messagerole'),
+    )
+    content = Column(Text)
+    sequence = Column(Integer)
+    tokens_input = Column(Integer, default=0)
+    tokens_output = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    chat = relationship("Chat", back_populates="messages")
+
+    def __repr__(self):
+        return f"<Message {self.id} chat={self.chat_id} role={self.role}>"
+
+
+class TaskEvent(Base):
+    """Event emitted during task execution."""
+    __tablename__ = 'task_events'
+
+    id = Column(Integer, primary_key=True)
+    task_id = Column(Integer, ForeignKey('tasks.id'), index=True)
+    event_type = Column(String(50))
+    event_data = Column(JSON)
+    sequence = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    task = relationship("Task", back_populates="events")
+
+    def __repr__(self):
+        return f"<TaskEvent {self.id} task={self.task_id} type={self.event_type}>"
+
+
 class Task(Base):
     """Task model - simplified job execution."""
     __tablename__ = 'tasks'
@@ -41,6 +108,9 @@ class Task(Base):
     session_id = Column(String(100))  # Claude session_id (for resume)
     workspace = Column(String(255))  # cwd for agent
 
+    # Chat link
+    chat_id = Column(Integer, ForeignKey('chats.id'), nullable=True, index=True)
+
     # Execution
     claimed_by = Column(String(100), index=True)  # worker-{hostname}
     started_at = Column(DateTime)
@@ -49,6 +119,10 @@ class Task(Base):
     result = Column(JSON)
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    chat = relationship("Chat", back_populates="tasks")
+    events = relationship("TaskEvent", back_populates="task", order_by="TaskEvent.sequence")
 
     def __repr__(self):
         return f"<Task {self.id} type={self.task_type} status={self.status}>"

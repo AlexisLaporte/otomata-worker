@@ -1,5 +1,6 @@
 """Worker polling loop."""
 
+import asyncio
 import os
 import socket
 import time
@@ -9,9 +10,11 @@ from typing import Optional
 
 from .models import Task, TaskStatus
 from .task_manager import TaskManager
+from .chat_manager import ChatManager
 from .secrets import secrets_service
+from .events import event_store
 from .executors.script import execute_script
-from .executors.agent import run_agent
+from .executors.agent import execute_agent, run_agent
 
 
 class Worker:
@@ -23,32 +26,18 @@ class Worker:
         worker_id: Optional[str] = None,
         poll_interval: int = 5
     ):
-        """Initialize worker.
-
-        Args:
-            workspace: Default workspace directory
-            worker_id: Unique worker identifier (defaults to worker-{hostname})
-            poll_interval: Seconds between polls for new tasks
-        """
         self.workspace = workspace or os.getcwd()
         self.worker_id = worker_id or f"worker-{socket.gethostname()}"
         self.poll_interval = poll_interval
         self.task_manager = TaskManager()
+        self.chat_manager = ChatManager()
         self.running = False
 
     def execute_task(self, task: Task) -> dict:
-        """Execute a single task.
-
-        Args:
-            task: Task to execute
-
-        Returns:
-            Result dict
-        """
+        """Execute a single task."""
         workspace = task.workspace or self.workspace
 
         if task.task_type == 'script':
-            # Get required secrets from params
             required_secrets = None
             if task.params and 'required_secrets' in task.params:
                 required_secrets = task.params['required_secrets']
@@ -67,21 +56,61 @@ class Worker:
                 return {'success': False, 'error': output, 'metadata': metadata}
 
         elif task.task_type == 'agent':
-            # Get secrets for agent
             secrets = None
             if task.params and 'required_secrets' in task.params:
                 secrets = secrets_service.get_for_task(task.params['required_secrets'])
 
-            result = run_agent(task, secrets)
+            # Chat-aware execution
+            if task.chat_id:
+                return self._execute_chat_agent(task, secrets)
 
-            # Update session_id if returned
+            # Legacy standalone agent
+            result = run_agent(task, secrets)
             if result.get('session_id'):
                 self.task_manager.update_session_id(task.id, result['session_id'])
-
             return result
 
         else:
             return {'success': False, 'error': f"Unknown task type: {task.task_type}"}
+
+    def _execute_chat_agent(self, task: Task, secrets: Optional[dict] = None) -> dict:
+        """Execute agent task with chat context."""
+        chat = self.chat_manager.get_chat(task.chat_id)
+        if not chat:
+            return {'success': False, 'error': f"Chat {task.chat_id} not found"}
+
+        history = self.chat_manager.get_history(task.chat_id)
+
+        result = run_agent(
+            task,
+            secrets=secrets,
+            history=history,
+            system_prompt=chat['system_prompt'],
+            allowed_tools=chat['allowed_tools'],
+            max_turns=chat['max_turns'],
+            env={},
+            emit_events=True,
+        )
+
+        if result.get('success'):
+            # Save user message + assistant response
+            self.chat_manager.add_message(
+                chat_id=task.chat_id,
+                role='user',
+                content=task.prompt,
+            )
+            self.chat_manager.add_message(
+                chat_id=task.chat_id,
+                role='assistant',
+                content=result.get('output', ''),
+                tokens_input=result.get('input_tokens', 0),
+                tokens_output=result.get('output_tokens', 0),
+            )
+
+        # Cleanup event store
+        event_store.cleanup(task.id)
+
+        return result
 
     def process_one(self) -> bool:
         """Try to claim and process one task.
@@ -113,7 +142,7 @@ class Worker:
         return True
 
     def run(self):
-        """Start the worker polling loop."""
+        """Start the worker polling loop (blocking, for CLI use)."""
         self.running = True
 
         def handle_signal(signum, frame):
@@ -138,6 +167,31 @@ class Worker:
                 time.sleep(self.poll_interval)
 
         print(f"[{self.worker_id}] Worker stopped")
+
+
+async def async_poll_loop(
+    workspace: Optional[str] = None,
+    worker_id: Optional[str] = None,
+    poll_interval: int = 5
+):
+    """Async polling loop for coexistence with FastAPI event loop."""
+    worker = Worker(
+        workspace=workspace,
+        worker_id=worker_id,
+        poll_interval=poll_interval
+    )
+    worker.running = True
+
+    print(f"[{worker.worker_id}] Starting async poll loop (interval: {poll_interval}s)")
+
+    while worker.running:
+        try:
+            processed = await asyncio.to_thread(worker.process_one)
+            if not processed:
+                await asyncio.sleep(poll_interval)
+        except Exception as e:
+            print(f"[{worker.worker_id}] Poll error: {e}")
+            await asyncio.sleep(poll_interval)
 
 
 def run_worker(
