@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "otomata-worker"
 version = "0.1.0"
 description = "Distributed task worker with Claude Agent SDK support"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "sqlalchemy>=2.0",
     "psycopg2-binary",
