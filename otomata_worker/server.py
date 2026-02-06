@@ -207,6 +207,24 @@ def create_app() -> FastAPI:
             }
         )
 
+    # --- Usage ---
+
+    @app.get("/usage", dependencies=[Depends(verify_api_key)])
+    def get_usage(tenant: Optional[str] = None, since: Optional[str] = None, until: Optional[str] = None):
+        """Get aggregated token usage with cost estimate."""
+        from datetime import date as date_type
+        since_date = date_type.fromisoformat(since) if since else None
+        until_date = date_type.fromisoformat(until) if until else None
+        usage = chat_manager.get_usage(tenant=tenant, since=since_date, until=until_date)
+
+        # Cost estimate (Sonnet 4: $3/MTok input, $15/MTok output)
+        input_cost = usage['total_input_tokens'] * 3.0 / 1_000_000
+        output_cost = usage['total_output_tokens'] * 15.0 / 1_000_000
+        usage['estimated_cost_usd'] = round(input_cost + output_cost, 4)
+        usage['pricing_note'] = 'claude-sonnet-4 ($3/MTok in, $15/MTok out)'
+
+        return usage
+
     # --- Tasks ---
 
     @app.get("/tasks", dependencies=[Depends(verify_api_key)])

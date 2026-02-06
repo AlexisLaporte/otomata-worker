@@ -1,7 +1,9 @@
 """Chat management - create chats, add messages, get history."""
 
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from typing import Optional
+
+from sqlalchemy import func
 
 from .models import Chat, Message, MessageRole, Task, TaskEvent
 from .database import get_session
@@ -246,6 +248,64 @@ class ChatManager:
                 {"role": m.role.value, "content": m.content}
                 for m in messages
             ]
+
+    def get_usage(self, tenant: Optional[str] = None, since: Optional[date] = None, until: Optional[date] = None) -> dict:
+        """Aggregate token usage across messages.
+
+        Args:
+            tenant: Filter by chat tenant
+            since: Start date (inclusive)
+            until: End date (inclusive)
+
+        Returns:
+            Dict with total tokens and per-chat breakdown
+        """
+        with get_session() as session:
+            q = session.query(
+                Chat.id.label('chat_id'),
+                Chat.tenant,
+                func.sum(Message.tokens_input).label('input_tokens'),
+                func.sum(Message.tokens_output).label('output_tokens'),
+                func.count(Message.id).label('message_count'),
+            ).join(Message, Message.chat_id == Chat.id)
+
+            if tenant:
+                q = q.filter(Chat.tenant == tenant)
+            if since:
+                q = q.filter(Message.created_at >= datetime.combine(since, datetime.min.time()))
+            if until:
+                q = q.filter(Message.created_at < datetime.combine(until, datetime.min.time()) + timedelta(days=1))
+
+            q = q.group_by(Chat.id, Chat.tenant)
+            rows = q.all()
+
+            # Fetch metadata separately
+            chat_ids = [r.chat_id for r in rows]
+            chat_meta = {}
+            if chat_ids:
+                for c in session.query(Chat.id, Chat.metadata_).filter(Chat.id.in_(chat_ids)):
+                    chat_meta[c.id] = c.metadata_ or {}
+
+            total_input = sum(r.input_tokens or 0 for r in rows)
+            total_output = sum(r.output_tokens or 0 for r in rows)
+
+            chats = []
+            for r in rows:
+                meta = chat_meta.get(r.chat_id, {})
+                chats.append({
+                    'chat_id': r.chat_id,
+                    'tenant': r.tenant,
+                    'title': meta.get('title', ''),
+                    'input_tokens': r.input_tokens or 0,
+                    'output_tokens': r.output_tokens or 0,
+                    'message_count': r.message_count,
+                })
+
+            return {
+                'total_input_tokens': total_input,
+                'total_output_tokens': total_output,
+                'chats': chats,
+            }
 
     def update_chat(self, chat_id: int, **kwargs) -> bool:
         """Update chat fields.
