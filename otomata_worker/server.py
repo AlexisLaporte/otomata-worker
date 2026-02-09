@@ -256,6 +256,36 @@ def create_app() -> FastAPI:
             return {"ok": True}
         raise HTTPException(400, "Cannot retry (not failed or not found)")
 
+    # --- Identities ---
+
+    identity_manager = None
+
+    def _get_identity_manager():
+        nonlocal identity_manager
+        if identity_manager is None:
+            from .identities import IdentityManager
+            identity_manager = IdentityManager()
+        return identity_manager
+
+    @app.get("/identities/available", dependencies=[Depends(verify_api_key)])
+    def get_available_identity(platform: str, action: Optional[str] = None):
+        """Get an available identity with decrypted cookie for the given platform."""
+        mgr = _get_identity_manager()
+        identity_id = mgr.get_available(platform, action_type=action)
+        if not identity_id:
+            raise HTTPException(404, f"No available identity for {platform}")
+
+        identity = mgr.get_by_id(identity_id)
+        cookie = mgr.get_cookie(identity_id)
+        mgr.mark_used(identity_id)
+
+        return {
+            "identity_name": identity["name"],
+            "account_type": identity["account_type"],
+            "cookie": cookie,
+            "user_agent": identity.get("user_agent"),
+        }
+
     return app
 
 
